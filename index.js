@@ -5,11 +5,14 @@ const helmet = require("helmet");
 const { body, param, validationResult } = require("express-validator");
 const sanitizeHtml = require("sanitize-html");
 
-
 const app = express();
+
+// ---------------- MIDDLEWARE ORDER MATTERS ----------------
+app.use(helmet({
+  contentSecurityPolicy: false, // Adjust based on your needs
+}));
 app.use(cors());
 app.use(express.json());
-app.use(helmet());
 
 // ---------------- RATE LIMITING ----------------
 const requestTimes = new Map();
@@ -64,17 +67,25 @@ const db = mysql.createConnection({
   database: "naranja-nestjs_crud",
 });
 
+// Connect to database
+db.connect((err) => {
+  if (err) {
+    console.error('❌ Error connecting to MySQL:', err.message);
+    process.exit(1);
+  }
+  console.log('✅ Connected to MySQL database');
+});
+
 // ---------------- VALIDACIONES ----------------
 const validarTexto = [
   body("texto")
     .trim()
-    .escape()
     .isLength({ min: 1, max: 50 })
-    .withMessage("Texto inválido"),
+    .withMessage("Texto debe tener entre 1 y 50 caracteres"),
 ];
 
 const validarId = [
-  param("id").isInt({ min: 1 }).withMessage("ID inválido"),
+  param("id").isInt({ min: 1 }).withMessage("ID debe ser un número positivo"),
 ];
 
 // ---------------- CRUD ----------------
@@ -90,15 +101,21 @@ app.post("/crud", validarTexto, (req, res) => {
 
   const sql = "INSERT INTO crud (texto) VALUES (?)";
   db.query(sql, [texto], (err, result) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
-    res.json({ msg: "Insertado", id: result.insertId });
+    if (err) {
+      console.error('DB Error:', err);
+      return res.status(500).json({ error: "Error al insertar" });
+    }
+    res.status(201).json({ msg: "Insertado", id: result.insertId });
   });
 });
 
 // READ ALL
 app.get("/crud", (req, res) => {
   db.query("SELECT * FROM crud", (err, rows) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
+    if (err) {
+      console.error('DB Error:', err);
+      return res.status(500).json({ error: "Error al obtener datos" });
+    }
     res.json(rows);
   });
 });
@@ -114,9 +131,12 @@ app.put("/crud/:id", [...validarId, ...validarTexto], (req, res) => {
 
   const sql = "UPDATE crud SET texto=? WHERE id=?";
   db.query(sql, [texto, req.params.id], (err, result) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
+    if (err) {
+      console.error('DB Error:', err);
+      return res.status(500).json({ error: "Error al actualizar" });
+    }
     if (result.affectedRows === 0) {
-      return res.status(404).json({ msg: "No existe" });
+      return res.status(404).json({ msg: "Registro no encontrado" });
     }
     res.json({ msg: "Actualizado" });
   });
@@ -131,16 +151,43 @@ app.delete("/crud/:id", validarId, (req, res) => {
 
   const sql = "DELETE FROM crud WHERE id=?";
   db.query(sql, [req.params.id], (err, result) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
+    if (err) {
+      console.error('DB Error:', err);
+      return res.status(500).json({ error: "Error al eliminar" });
+    }
     if (result.affectedRows === 0) {
-      return res.status(404).json({ msg: "No existe" });
+      return res.status(404).json({ msg: "Registro no encontrado" });
     }
     res.json({ msg: "Eliminado" });
   });
 });
 
+// ---------------- ERROR HANDLERS ----------------
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: "Ruta no encontrada" });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('Server Error:', err);
+  res.status(500).json({ error: "Error interno del servidor" });
+});
+
 // ---------------- SERVIDOR ----------------
 const PORT = 3000;
-app.listen(PORT, () => {
-console.info(`app lista`);
+const server = app.listen(PORT, () => {
+  console.info(`🚀 Servidor corriendo en puerto ${PORT}`);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\n⚠️  Cerrando servidor...');
+  server.close(() => {
+    db.end((err) => {
+      if (err) console.error('Error cerrando DB:', err);
+      console.log('✅ Servidor cerrado correctamente');
+      process.exit(err ? 1 : 0);
+    });
+  });
 });
