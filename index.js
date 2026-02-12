@@ -4,14 +4,13 @@ const cors = require("cors");
 const helmet = require("helmet");
 const xss = require("xss-clean");
 const { body, param, validationResult } = require("express-validator");
+const sanitizeHtml = require("sanitize-html");
+
 
 const app = express();
-app.use(cors({origin:""}));
+app.use(cors());
 app.use(express.json());
-
-// ---------------- SEGURIDAD GLOBAL ----------------
-app.use(helmet());          // Headers seguros
-app.use(xss());             // Protección XSS
+app.use(helmet());
 
 // ---------------- RATE LIMITING ----------------
 const requestTimes = new Map();
@@ -41,6 +40,21 @@ const rateLimitMiddleware = (req, res, next) => {
   next();
 };
 
+const sanitizeInput = (req, res, next) => {
+  if (req.body) {
+    for (let key in req.body) {
+      if (typeof req.body[key] === "string") {
+        req.body[key] = sanitizeHtml(req.body[key], {
+          allowedTags: [],
+          allowedAttributes: {}
+        });
+      }
+    }
+  }
+  next();
+};
+
+app.use(sanitizeInput);
 app.use(rateLimitMiddleware);
 
 // ---------------- CONEXIÓN MYSQL ----------------
