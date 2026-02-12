@@ -6,13 +6,9 @@ const { body, param, validationResult } = require("express-validator");
 const sanitizeHtml = require("sanitize-html");
 
 const app = express();
-
-// ---------------- MIDDLEWARE ORDER MATTERS ----------------
-app.use(helmet({
-  contentSecurityPolicy: false, // Adjust based on your needs
-}));
 app.use(cors());
 app.use(express.json());
+app.use(helmet());
 
 // ---------------- RATE LIMITING ----------------
 const requestTimes = new Map();
@@ -57,7 +53,7 @@ const sanitizeInput = (req, res, next) => {
 };
 
 app.use(sanitizeInput);
-app.use(rateLimitMiddleware);
+// NO aplicar rate limiting globalmente
 
 // ---------------- CONEXIÓN MYSQL ----------------
 const db = mysql.createConnection({
@@ -67,31 +63,31 @@ const db = mysql.createConnection({
   database: "naranja-nestjs_crud",
 });
 
-// Connect to database
 db.connect((err) => {
   if (err) {
-    console.error('❌ Error connecting to MySQL:', err.message);
+    console.error('Error connecting to MySQL:', err);
     process.exit(1);
   }
-  console.log('✅ Connected to MySQL database');
+  console.log('Connected to MySQL database');
 });
 
 // ---------------- VALIDACIONES ----------------
 const validarTexto = [
   body("texto")
     .trim()
+    .escape()
     .isLength({ min: 1, max: 50 })
-    .withMessage("Texto debe tener entre 1 y 50 caracteres"),
+    .withMessage("Texto inválido"),
 ];
 
 const validarId = [
-  param("id").isInt({ min: 1 }).withMessage("ID debe ser un número positivo"),
+  param("id").isInt({ min: 1 }).withMessage("ID inválido"),
 ];
 
 // ---------------- CRUD ----------------
 
-// CREATE
-app.post("/crud", validarTexto, (req, res) => {
+// CREATE - CON rate limiting
+app.post("/crud", rateLimitMiddleware, validarTexto, (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -101,27 +97,21 @@ app.post("/crud", validarTexto, (req, res) => {
 
   const sql = "INSERT INTO crud (texto) VALUES (?)";
   db.query(sql, [texto], (err, result) => {
-    if (err) {
-      console.error('DB Error:', err);
-      return res.status(500).json({ error: "Error al insertar" });
-    }
-    res.status(201).json({ msg: "Insertado", id: result.insertId });
+    if (err) return res.status(500).json({ error: "DB Error" });
+    res.json({ msg: "Insertado", id: result.insertId });
   });
 });
 
-// READ ALL
+// READ ALL - SIN rate limiting
 app.get("/crud", (req, res) => {
   db.query("SELECT * FROM crud", (err, rows) => {
-    if (err) {
-      console.error('DB Error:', err);
-      return res.status(500).json({ error: "Error al obtener datos" });
-    }
+    if (err) return res.status(500).json({ error: "DB Error" });
     res.json(rows);
   });
 });
 
-// UPDATE
-app.put("/crud/:id", [...validarId, ...validarTexto], (req, res) => {
+// UPDATE - CON rate limiting
+app.put("/crud/:id", rateLimitMiddleware, [...validarId, ...validarTexto], (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -131,19 +121,16 @@ app.put("/crud/:id", [...validarId, ...validarTexto], (req, res) => {
 
   const sql = "UPDATE crud SET texto=? WHERE id=?";
   db.query(sql, [texto, req.params.id], (err, result) => {
-    if (err) {
-      console.error('DB Error:', err);
-      return res.status(500).json({ error: "Error al actualizar" });
-    }
+    if (err) return res.status(500).json({ error: "DB Error" });
     if (result.affectedRows === 0) {
-      return res.status(404).json({ msg: "Registro no encontrado" });
+      return res.status(404).json({ msg: "No existe" });
     }
     res.json({ msg: "Actualizado" });
   });
 });
 
-// DELETE
-app.delete("/crud/:id", validarId, (req, res) => {
+// DELETE - CON rate limiting
+app.delete("/crud/:id", rateLimitMiddleware, validarId, (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -151,43 +138,16 @@ app.delete("/crud/:id", validarId, (req, res) => {
 
   const sql = "DELETE FROM crud WHERE id=?";
   db.query(sql, [req.params.id], (err, result) => {
-    if (err) {
-      console.error('DB Error:', err);
-      return res.status(500).json({ error: "Error al eliminar" });
-    }
+    if (err) return res.status(500).json({ error: "DB Error" });
     if (result.affectedRows === 0) {
-      return res.status(404).json({ msg: "Registro no encontrado" });
+      return res.status(404).json({ msg: "No existe" });
     }
     res.json({ msg: "Eliminado" });
   });
 });
 
-// ---------------- ERROR HANDLERS ----------------
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: "Ruta no encontrada" });
-});
-
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error('Server Error:', err);
-  res.status(500).json({ error: "Error interno del servidor" });
-});
-
 // ---------------- SERVIDOR ----------------
 const PORT = 3000;
-const server = app.listen(PORT, () => {
-  console.info(`🚀 Servidor corriendo en puerto ${PORT}`);
-});
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n⚠️  Cerrando servidor...');
-  server.close(() => {
-    db.end((err) => {
-      if (err) console.error('Error cerrando DB:', err);
-      console.log('✅ Servidor cerrado correctamente');
-      process.exit(err ? 1 : 0);
-    });
-  });
+app.listen(PORT, () => {
+  console.info(`app lista`);
 });
