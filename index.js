@@ -1,4 +1,3 @@
-require("dotenv").config();
 const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
@@ -6,14 +5,13 @@ const helmet = require("helmet");
 const xss = require("xss-clean");
 const { body, param, validationResult } = require("express-validator");
 
-
 const app = express();
-app.use(cors({ origin: "" }));
+app.use(cors({origin:""}));
 app.use(express.json());
 
 // ---------------- SEGURIDAD GLOBAL ----------------
-app.use(helmet()); // Headers seguros
-app.use(xss()); // Protección XSS
+app.use(helmet());          // Headers seguros
+app.use(xss());             // Protección XSS
 
 // ---------------- RATE LIMITING ----------------
 const requestTimes = new Map();
@@ -47,10 +45,10 @@ app.use(rateLimitMiddleware);
 
 // ---------------- CONEXIÓN MYSQL ----------------
 const db = mysql.createConnection({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+  host: "mysql-naranja-nestjs.alwaysdata.net",
+  user: "naranja-nestjs_fdf",
+  password: "naranjajs",
+  database: "naranja-nestjs_crud",
 });
 
 // ---------------- VALIDACIONES ----------------
@@ -62,7 +60,9 @@ const validarTexto = [
     .withMessage("Texto inválido"),
 ];
 
-const validarId = [param("id").isInt({ min: 1 }).withMessage("ID inválido")];
+const validarId = [
+  param("id").isInt({ min: 1 }).withMessage("ID inválido"),
+];
 
 // ---------------- CRUD ----------------
 
@@ -77,10 +77,7 @@ app.post("/crud", validarTexto, (req, res) => {
 
   const sql = "INSERT INTO crud (texto) VALUES (?)";
   db.query(sql, [texto], (err, result) => {
-    if (err) {
-      console.error("DB Error (Insert):", err);
-      return res.status(500).json({ error: "DB Error" });
-    }
+    if (err) return res.status(500).json({ error: "DB Error" });
     res.json({ msg: "Insertado", id: result.insertId });
   });
 });
@@ -88,10 +85,7 @@ app.post("/crud", validarTexto, (req, res) => {
 // READ ALL
 app.get("/crud", (req, res) => {
   db.query("SELECT * FROM crud", (err, rows) => {
-    if (err) {
-      console.error("DB Error (Select):", err);
-      return res.status(500).json({ error: "DB Error" });
-    }
+    if (err) return res.status(500).json({ error: "DB Error" });
     res.json(rows);
   });
 });
@@ -133,7 +127,7 @@ app.delete("/crud/:id", validarId, (req, res) => {
 });
 
 // ---------------- SERVIDOR ----------------
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 app.listen(PORT, () => {
-  console.info(`app lista`);
+console.info(`app lista`);
 });
