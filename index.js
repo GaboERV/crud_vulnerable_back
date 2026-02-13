@@ -145,10 +145,12 @@ app.put("/crud/:id", rateLimitMiddleware, [...validarId, ...validarTexto], (req,
 // DELETE - CON rate limiting
 app.delete("/crud/:id", rateLimitMiddleware, validarId, (req, res) => {
   const errors = validationResult(req);
+  
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
   }
-
+  console.log("🧨 DELETE ejecutado desde IP:", req.ip, "ID:", req.params.id)
+  
   const sql = "DELETE FROM crud WHERE id=?";
   db.query(sql, [req.params.id], (err, result) => {
     if (err) return res.status(500).json({ error: "DB Error" });
