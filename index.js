@@ -4,40 +4,77 @@ const cors = require("cors");
 const helmet = require("helmet");
 const { body, param, validationResult } = require("express-validator");
 const sanitizeHtml = require("sanitize-html");
+const rateLimit = require("express-rate-limit");
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+
+// CORS restrictivo - configurar según tus dominios de frontend
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Permitir requests sin origin (como Postman, mobile apps)
+    if (!origin) return callback(null, true);
+    
+    // Lista blanca de dominios permitidos - AJUSTAR SEGÚN TU FRONTEND
+    const allowedOrigins = [
+      'http://localhost:3001',
+      'http://localhost:5173',
+      'http://127.0.0.1:3001',
+      'http://127.0.0.1:5173'
+      // Agregar aquí tus dominios de producción: 'https://tu-app.com'
+    ];
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('🚫 CORS bloqueó origen:', origin);
+      callback(new Error('No permitido por CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '1mb' })); // Limitar tamaño de payload
 app.use(helmet());
 
-// ---------------- RATE LIMITING ----------------
-const requestTimes = new Map();
-const COOLDOWN_MS = 5000;
+// ---------------- RATE LIMITING MEJORADO ----------------
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, time] of requestTimes.entries()) {
-    if (now - time > COOLDOWN_MS) requestTimes.delete(ip);
+// Rate limiter para operaciones de escritura (POST, PUT, DELETE)
+const writeLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minuto
+  max: 10, // máximo 10 requests por minuto
+  message: {
+    error: "Too Many Requests",
+    msg: "Demasiadas peticiones, espera 1 minuto"
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // NO aplicar rate limit a localhost en desarrollo
+    const ip = req.ip || req.connection.remoteAddress;
+    return process.env.NODE_ENV === 'development' && 
+           (ip === "::1" || ip === "127.0.0.1" || ip === "::ffff:127.0.0.1");
   }
-}, 60000);
+});
 
-
-const rateLimitMiddleware = (req, res, next) => {
-  const ip = req.ip || req.connection.remoteAddress;
-  const now = Date.now();
-
-  if (requestTimes.has(ip)) {
-    if (now - requestTimes.get(ip) < COOLDOWN_MS) {
-      return res.status(429).json({
-        error: "Too Many Requests",
-        msg: "Espera 5 segundos antes de volver a intentar",
-      });
-    }
+// Rate limiter extra estricto para DELETE
+const deleteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 5, // máximo 5 deletes cada 15 minutos
+  message: {
+    error: "Too Many Requests",
+    msg: "Demasiadas eliminaciones, espera 15 minutos"
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    const ip = req.ip || req.connection.remoteAddress;
+    return process.env.NODE_ENV === 'development' && 
+           (ip === "::1" || ip === "127.0.0.1" || ip === "::ffff:127.0.0.1");
   }
-
-  requestTimes.set(ip, now);
-  next();
-};
+});
 
 const sanitizeInput = (req, res, next) => {
   if (req.body) {
@@ -60,7 +97,7 @@ app.use(sanitizeInput);
 const db = mysql.createPool({
   host: "mysql-naranja-nestjs.alwaysdata.net",
   user: "naranja-nestjs_fdf",
-  password: "naranjajs",
+  password: "naranjajs", // TODO: Mover a variables de entorno en producción
   database: "naranja-nestjs_crud",
 
   waitForConnections: true,
@@ -70,9 +107,10 @@ const db = mysql.createPool({
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
 
-  ssl: {
-    rejectUnauthorized: false
-  }
+  // SSL: solo desactivar verificación en desarrollo
+  ssl: process.env.NODE_ENV === 'production' 
+    ? { rejectUnauthorized: true }
+    : { rejectUnauthorized: false }
 });
 setInterval(() => {
   db.query("SELECT 1");
@@ -97,10 +135,26 @@ const validarId = [
   param("id").isInt({ min: 1 }).withMessage("ID inválido"),
 ];
 
+// ---------------- MIDDLEWARE SEGURIDAD ----------------
+const bloquearLocalhost = (req, res, next) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  
+  // Bloquear todas las variantes de localhost
+  if (ip === "::1" || ip === "127.0.0.1" || ip === "::ffff:127.0.0.1") {
+    console.log("🚫 Petición bloqueada desde localhost, IP:", ip, "Ruta:", req.method, req.path);
+    return res.status(403).json({ 
+      error: "Forbidden", 
+      msg: "Operaciones destructivas no permitidas desde localhost" 
+    });
+  }
+  
+  next();
+};
+
 // ---------------- CRUD ----------------
 
 // CREATE - CON rate limiting
-app.post("/crud", rateLimitMiddleware, validarTexto, (req, res) => {
+app.post("/crud", writeLimiter, validarTexto, (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -110,7 +164,10 @@ app.post("/crud", rateLimitMiddleware, validarTexto, (req, res) => {
 
   const sql = "INSERT INTO crud (texto) VALUES (?)";
   db.query(sql, [texto], (err, result) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
+    if (err) {
+      console.error('DB Error en INSERT:', err.message);
+      return res.status(500).json({ error: "Error interno del servidor" });
+    }
     res.json({ msg: "Insertado", id: result.insertId });
   });
 });
@@ -118,13 +175,16 @@ app.post("/crud", rateLimitMiddleware, validarTexto, (req, res) => {
 // READ ALL - SIN rate limiting
 app.get("/crud", (req, res) => {
   db.query("SELECT * FROM crud", (err, rows) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
+    if (err) {
+      console.error('DB Error en SELECT:', err.message);
+      return res.status(500).json({ error: "Error interno del servidor" });
+    }
     res.json(rows);
   });
 });
 
-// UPDATE - CON rate limiting
-app.put("/crud/:id", rateLimitMiddleware, [...validarId, ...validarTexto], (req, res) => {
+// UPDATE - CON rate limiting y bloqueo localhost
+app.put("/crud/:id", bloquearLocalhost, writeLimiter, [...validarId, ...validarTexto], (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -134,7 +194,10 @@ app.put("/crud/:id", rateLimitMiddleware, [...validarId, ...validarTexto], (req,
 
   const sql = "UPDATE crud SET texto=? WHERE id=?";
   db.query(sql, [texto, req.params.id], (err, result) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
+    if (err) {
+      console.error('DB Error en UPDATE:', err.message);
+      return res.status(500).json({ error: "Error interno del servidor" });
+    }
     if (result.affectedRows === 0) {
       return res.status(404).json({ msg: "No existe" });
     }
@@ -142,27 +205,64 @@ app.put("/crud/:id", rateLimitMiddleware, [...validarId, ...validarTexto], (req,
   });
 });
 
-// DELETE - CON rate limiting
-app.delete("/crud/:id", rateLimitMiddleware, validarId, (req, res) => {
+// DELETE - CON rate limiting extra estricto, bloqueo localhost y auditoría
+app.delete("/crud/:id", bloquearLocalhost, deleteLimiter, validarId, (req, res) => {
   const errors = validationResult(req);
   
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
   }
-  console.log("🧨 DELETE ejecutado desde IP:", req.ip, "ID:", req.params.id)
+  
+  const ip = req.ip || req.connection.remoteAddress;
+  const id = req.params.id;
+  
+  console.log(`🧨 DELETE - IP: ${ip} | ID: ${id} | Time: ${new Date().toISOString()}`);
   
   const sql = "DELETE FROM crud WHERE id=?";
-  db.query(sql, [req.params.id], (err, result) => {
-    if (err) return res.status(500).json({ error: "DB Error" });
+  db.query(sql, [id], (err, result) => {
+    if (err) {
+      console.error(`❌ DELETE FAILED - IP: ${ip} | ID: ${id} | Error: ${err.message}`);
+      return res.status(500).json({ error: "Error interno del servidor" });
+    }
     if (result.affectedRows === 0) {
+      console.log(`⚠️  DELETE - Registro no encontrado | IP: ${ip} | ID: ${id}`);
       return res.status(404).json({ msg: "No existe" });
     }
+    console.log(`✅ DELETE SUCCESS - IP: ${ip} | ID: ${id}`);
     res.json({ msg: "Eliminado" });
   });
 });
 
 // ---------------- SERVIDOR ----------------
 const PORT = 3000;
-app.listen(PORT, () => {
-  console.info(`app lista`);
+const server = app.listen(PORT, () => {
+  console.info(`🚀 Servidor ejecutándose en puerto ${PORT}`);
+  console.info(`📊 Modo: ${process.env.NODE_ENV || 'development'}`);
 });
+
+// Graceful shutdown
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+function shutdown() {
+  console.log('\n🛑 Señal de apagado recibida, cerrando servidor...');
+  
+  server.close(() => {
+    console.log('✅ Servidor HTTP cerrado');
+    
+    db.end((err) => {
+      if (err) {
+        console.error('❌ Error cerrando pool MySQL:', err.message);
+        process.exit(1);
+      }
+      console.log('✅ Pool MySQL cerrado');
+      process.exit(0);
+    });
+  });
+  
+  // Forzar cierre después de 10 segundos
+  setTimeout(() => {
+    console.error('⏱️  Timeout - Forzando cierre');
+    process.exit(1);
+  }, 10000);
+}
