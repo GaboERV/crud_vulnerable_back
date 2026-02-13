@@ -8,6 +8,10 @@ const rateLimit = require("express-rate-limit");
 
 const app = express();
 
+// CRÍTICO: Configurar Express para confiar en proxies (Render + Cloudflare)
+// Esto hace que req.ip lea correctamente X-Forwarded-For
+app.set('trust proxy', true);
+
 // CORS restrictivo - configurar según tus dominios de frontend
 const corsOptions = {
   origin: function (origin, callback) {
@@ -20,7 +24,7 @@ const corsOptions = {
       'http://localhost:5173',
       'http://127.0.0.1:3001',
       'http://127.0.0.1:5173',
-      'https://crud-lqat.vercel.app'
+      'https://crud-lqat.vercel.app' // ← Tu frontend en Vercel
     ];
     
     if (allowedOrigins.indexOf(origin) !== -1) {
@@ -137,10 +141,20 @@ const validarId = [
 
 // ---------------- MIDDLEWARE SEGURIDAD ----------------
 
+// Función helper para obtener la IP real del cliente
+const getRealIP = (req) => {
+  // Prioridad de headers (Cloudflare > X-Forwarded-For > req.ip)
+  return req.headers['cf-connecting-ip'] 
+         || req.headers['true-client-ip']
+         || (req.headers['x-forwarded-for']?.split(',')[0]?.trim())
+         || req.ip 
+         || req.connection.remoteAddress;
+};
+
 // OPCIÓN 1: IP Whitelist (COMENTAR si no quieres usarlo)
 // Solo permite IPs específicas para operaciones destructivas
 const ipWhitelist = (req, res, next) => {
-  const ip = req.ip || req.connection.remoteAddress;
+  const ip = getRealIP(req);
   
   // Lista de IPs permitidas - AJUSTAR SEGÚN TUS NECESIDADES
   const allowedIPs = [
@@ -175,7 +189,16 @@ const ipWhitelist = (req, res, next) => {
 // Middleware anti-bot: detectar y bloquear bots maliciosos
 const antiBot = (req, res, next) => {
   const userAgent = req.headers['user-agent'] || '';
-  const ip = req.ip || req.connection.remoteAddress;
+  const ip = getRealIP(req);
+  
+  // EXCEPCIÓN: Permitir requests internos autorizados en Render
+  const isInternalRender = req.ip === "::1" || req.ip === "127.0.0.1" || req.ip === "::ffff:127.0.0.1";
+  const renderInternalToken = req.headers['x-internal-token']; // Token secreto para servicios internos
+  
+  if (isInternalRender && renderInternalToken === process.env.INTERNAL_TOKEN) {
+    // Request interno autorizado en Render
+    return next();
+  }
   
   // Lista negra de patrones de bots conocidos
   const botPatterns = [
@@ -185,6 +208,7 @@ const antiBot = (req, res, next) => {
     /scraper/i,
     /curl/i,
     /wget/i,
+    /python-requests/i,  // ← BLOQUEAR Python requests específicamente
     /python/i,
     /java/i,
     /go-http/i,
@@ -198,10 +222,11 @@ const antiBot = (req, res, next) => {
   
   if (isBot) {
     console.log("🤖 BOT DETECTADO Y BLOQUEADO");
-    console.log("   IP:", ip);
+    console.log("   IP Real:", ip);
     console.log("   User-Agent:", userAgent);
     console.log("   Ruta:", req.method, req.path);
     console.log("   Timestamp:", new Date().toISOString());
+    console.log("   Headers:", JSON.stringify(req.headers, null, 2));
     
     return res.status(403).json({
       error: "Forbidden",
@@ -213,9 +238,15 @@ const antiBot = (req, res, next) => {
 };
 
 const bloquearLocalhost = (req, res, next) => {
-  const ip = req.ip || req.connection.remoteAddress;
+  const ip = getRealIP(req); // ← USAR IP REAL
   
-  // Bloquear todas las variantes de localhost
+  // EN RENDER/PRODUCCIÓN: No bloquear localhost (tráfico interno legítimo)
+  // Solo bloquear en desarrollo local
+  if (process.env.RENDER || process.env.NODE_ENV === 'production') {
+    return next(); // Permitir todo en producción
+  }
+  
+  // Bloquear todas las variantes de localhost SOLO EN DESARROLLO
   if (ip === "::1" || ip === "127.0.0.1" || ip === "::ffff:127.0.0.1") {
     // LOG FORENSE COMPLETO
     console.log("=".repeat(80));
@@ -223,6 +254,7 @@ const bloquearLocalhost = (req, res, next) => {
     console.log("⏰ Timestamp:", new Date().toISOString());
     console.log("🔗 Ruta:", req.method, req.path);
     console.log("🌐 IP detectada:", ip);
+    console.log("🌐 IP REAL (Cloudflare):", getRealIP(req));
     console.log("📡 req.ip:", req.ip);
     console.log("🔌 req.connection.remoteAddress:", req.connection.remoteAddress);
     console.log("🔍 X-Forwarded-For:", req.headers['x-forwarded-for']);
@@ -305,7 +337,7 @@ app.delete("/crud/:id", antiBot, bloquearLocalhost, deleteLimiter, validarId, (r
     return res.status(400).json({ errors: errors.array() });
   }
   
-  const ip = req.ip || req.connection.remoteAddress;
+  const ip = getRealIP(req); // ← USAR IP REAL
   const id = req.params.id;
   
   console.log(`🧨 DELETE - IP: ${ip} | ID: ${id} | Time: ${new Date().toISOString()}`);
