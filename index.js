@@ -19,8 +19,8 @@ const corsOptions = {
       'http://localhost:3001',
       'http://localhost:5173',
       'http://127.0.0.1:3001',
-      'http://127.0.0.1:5173',
-      'https://crud-lqat.vercel.app'
+      'http://127.0.0.1:5173'
+      // Agregar aquí tus dominios de producción: 'https://tu-app.com'
     ];
     
     if (allowedOrigins.indexOf(origin) !== -1) {
@@ -136,12 +136,104 @@ const validarId = [
 ];
 
 // ---------------- MIDDLEWARE SEGURIDAD ----------------
+
+// OPCIÓN 1: IP Whitelist (COMENTAR si no quieres usarlo)
+// Solo permite IPs específicas para operaciones destructivas
+const ipWhitelist = (req, res, next) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  
+  // Lista de IPs permitidas - AJUSTAR SEGÚN TUS NECESIDADES
+  const allowedIPs = [
+    // Agrega aquí las IPs que DEBEN poder hacer DELETE/UPDATE
+    // Ejemplos:
+    // '192.168.1.100',
+    // '203.0.113.45',
+    // '::ffff:192.168.1.100'
+  ];
+  
+  // Si la lista está vacía, permitir todo (para no bloquear accidentalmente)
+  if (allowedIPs.length === 0) {
+    return next();
+  }
+  
+  if (!allowedIPs.includes(ip)) {
+    console.log("🚫 IP NO AUTORIZADA BLOQUEADA");
+    console.log("   IP rechazada:", ip);
+    console.log("   Ruta:", req.method, req.path);
+    console.log("   User-Agent:", req.headers['user-agent']);
+    console.log("   Timestamp:", new Date().toISOString());
+    
+    return res.status(403).json({
+      error: "Forbidden",
+      msg: "Tu IP no está autorizada para esta operación"
+    });
+  }
+  
+  next();
+};
+
+// Middleware anti-bot: detectar y bloquear bots maliciosos
+const antiBot = (req, res, next) => {
+  const userAgent = req.headers['user-agent'] || '';
+  const ip = req.ip || req.connection.remoteAddress;
+  
+  // Lista negra de patrones de bots conocidos
+  const botPatterns = [
+    /bot/i,
+    /crawler/i,
+    /spider/i,
+    /scraper/i,
+    /curl/i,
+    /wget/i,
+    /python/i,
+    /java/i,
+    /go-http/i,
+    /axios/i,
+    /node-fetch/i,
+    /^$/  // User-Agent vacío
+  ];
+  
+  // Verificar si coincide con patrones de bot
+  const isBot = botPatterns.some(pattern => pattern.test(userAgent));
+  
+  if (isBot) {
+    console.log("🤖 BOT DETECTADO Y BLOQUEADO");
+    console.log("   IP:", ip);
+    console.log("   User-Agent:", userAgent);
+    console.log("   Ruta:", req.method, req.path);
+    console.log("   Timestamp:", new Date().toISOString());
+    
+    return res.status(403).json({
+      error: "Forbidden",
+      msg: "Acceso denegado para bots automatizados"
+    });
+  }
+  
+  next();
+};
+
 const bloquearLocalhost = (req, res, next) => {
   const ip = req.ip || req.connection.remoteAddress;
   
   // Bloquear todas las variantes de localhost
   if (ip === "::1" || ip === "127.0.0.1" || ip === "::ffff:127.0.0.1") {
-    console.log("🚫 Petición bloqueada desde localhost, IP:", ip, "Ruta:", req.method, req.path);
+    // LOG FORENSE COMPLETO
+    console.log("=".repeat(80));
+    console.log("🚫 PETICIÓN BLOQUEADA DESDE LOCALHOST");
+    console.log("⏰ Timestamp:", new Date().toISOString());
+    console.log("🔗 Ruta:", req.method, req.path);
+    console.log("🌐 IP detectada:", ip);
+    console.log("📡 req.ip:", req.ip);
+    console.log("🔌 req.connection.remoteAddress:", req.connection.remoteAddress);
+    console.log("🔍 X-Forwarded-For:", req.headers['x-forwarded-for']);
+    console.log("🔍 X-Real-IP:", req.headers['x-real-ip']);
+    console.log("🔍 CF-Connecting-IP:", req.headers['cf-connecting-ip']); // Cloudflare
+    console.log("🤖 User-Agent:", req.headers['user-agent']);
+    console.log("🌍 Origin:", req.headers['origin']);
+    console.log("🔗 Referer:", req.headers['referer']);
+    console.log("📋 Todos los headers:", JSON.stringify(req.headers, null, 2));
+    console.log("=".repeat(80));
+    
     return res.status(403).json({ 
       error: "Forbidden", 
       msg: "Operaciones destructivas no permitidas desde localhost" 
@@ -183,8 +275,8 @@ app.get("/crud", (req, res) => {
   });
 });
 
-// UPDATE - CON rate limiting y bloqueo localhost
-app.put("/crud/:id", bloquearLocalhost, writeLimiter, [...validarId, ...validarTexto], (req, res) => {
+// UPDATE - CON anti-bot, rate limiting y bloqueo localhost
+app.put("/crud/:id", antiBot, bloquearLocalhost, writeLimiter, [...validarId, ...validarTexto], (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -205,8 +297,8 @@ app.put("/crud/:id", bloquearLocalhost, writeLimiter, [...validarId, ...validarT
   });
 });
 
-// DELETE - CON rate limiting extra estricto, bloqueo localhost y auditoría
-app.delete("/crud/:id", bloquearLocalhost, deleteLimiter, validarId, (req, res) => {
+// DELETE - CON anti-bot, rate limiting extra estricto, bloqueo localhost y auditoría
+app.delete("/crud/:id", antiBot, bloquearLocalhost, deleteLimiter, validarId, (req, res) => {
   const errors = validationResult(req);
   
   if (!errors.isEmpty()) {
