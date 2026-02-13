@@ -15,21 +15,25 @@ app.set('trust proxy', true);
 // CORS restrictivo - configurar según tus dominios de frontend
 const corsOptions = {
   origin: function (origin, callback) {
-    // Permitir requests sin origin (como Postman, mobile apps)
-    if (!origin) return callback(null, true);
-    
-    // Lista blanca de dominios permitidos - AJUSTAR SEGÚN TU FRONTEND
     const allowedOrigins = [
       'http://localhost:3001',
       'http://localhost:5173',
       'http://127.0.0.1:3001',
       'http://127.0.0.1:5173',
-      'https://crud-lqat.vercel.app' // ← Tu frontend en Vercel
+      'https://crud-lqat.vercel.app'
     ];
     
+    // Si el origen está en la lista blanca, permitir
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
-    } else {
+    } 
+    // Si NO hay origen (navegador directo o Postman), BLOQUEAR
+    else if (!origin) {
+      console.log('🚫 Acceso directo bloqueado (Sin Origin)');
+      callback(new Error('Acceso directo no permitido. Se requiere un Origin válido.'));
+    } 
+    // Cualquier otro origen no autorizado
+    else {
       console.log('🚫 CORS bloqueó origen:', origin);
       callback(new Error('No permitido por CORS'));
     }
@@ -38,7 +42,6 @@ const corsOptions = {
   credentials: true,
   optionsSuccessStatus: 200
 };
-
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' })); // Limitar tamaño de payload
 app.use(helmet());
