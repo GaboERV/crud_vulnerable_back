@@ -21,6 +21,7 @@ setInterval(() => {
   }
 }, 60000);
 
+
 const rateLimitMiddleware = (req, res, next) => {
   const ip = req.ip || req.connection.remoteAddress;
   const now = Date.now();
@@ -56,12 +57,26 @@ app.use(sanitizeInput);
 // NO aplicar rate limiting globalmente
 
 // ---------------- CONEXIÓN MYSQL ----------------
-const db = mysql.createConnection({
+const db = mysql.createPool({
   host: "mysql-naranja-nestjs.alwaysdata.net",
   user: "naranja-nestjs_fdf",
   password: "naranjajs",
   database: "naranja-nestjs_crud",
+
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
+
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
+setInterval(() => {
+  db.query("SELECT 1");
+}, 300000); // cada 5 minutos
 
 db.connect((err) => {
   if (err) {
