@@ -78,13 +78,11 @@ setInterval(() => {
   db.query("SELECT 1");
 }, 300000); // cada 5 minutos
 
-db.connect((err) => {
-  if (err) {
-    console.error('Error connecting to MySQL:', err);
-    process.exit(1);
-  }
-  console.log('Connected to MySQL database');
+db.query("SELECT 1", err => {
+  if (err) console.error("❌ MySQL not reachable:", err.message);
+  else console.log("✅ MySQL pool conectado");
 });
+
 
 // ---------------- VALIDACIONES ----------------
 const validarTexto = [
